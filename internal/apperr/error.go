@@ -35,6 +35,14 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.cause }
 
+func (e *Error) WithCause(cause error) *Error {
+	if e == nil {
+		return nil
+	}
+	e.cause = cause
+	return e
+}
+
 func Validation(message string) *Error {
 	return &Error{Code: CodeValidation, Message: message}
 }
