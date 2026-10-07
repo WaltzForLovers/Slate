@@ -90,6 +90,9 @@ type showJSON struct {
 	Premiered      *string `json:"premiered"`
 	Runtime        *int    `json:"runtime"`
 	AverageRuntime *int    `json:"averageRuntime"`
+	Image          *struct {
+		Medium string `json:"medium"`
+	} `json:"image"`
 }
 
 func (s showJSON) toShow() Show {
@@ -102,6 +105,9 @@ func (s showJSON) toShow() Show {
 	}
 	if s.AverageRuntime != nil {
 		show.AverageRuntime = *s.AverageRuntime
+	}
+	if s.Image != nil {
+		show.Poster = s.Image.Medium
 	}
 	return show
 }
