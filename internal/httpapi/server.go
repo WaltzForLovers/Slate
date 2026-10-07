@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/WaltzForLovers/Slate/internal/apperr"
@@ -29,7 +32,7 @@ type server struct {
 	log     *log.Logger
 }
 
-func New(authSvc *auth.Service, catalogSvc *catalog.Service, queueSvc *queue.Service, logOut io.Writer) http.Handler {
+func New(authSvc *auth.Service, catalogSvc *catalog.Service, queueSvc *queue.Service, logOut io.Writer, files fs.FS) http.Handler {
 	if logOut == nil {
 		logOut = io.Discard
 	}
@@ -43,6 +46,7 @@ func New(authSvc *auth.Service, catalogSvc *catalog.Service, queueSvc *queue.Ser
 	mux.HandleFunc("POST /api/register", s.register)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
+	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/titles", s.searchTitles)
 	mux.HandleFunc("GET /api/titles/{id}", s.getTitle)
 	mux.HandleFunc("GET /api/queue", s.listQueue)
@@ -50,7 +54,39 @@ func New(authSvc *auth.Service, catalogSvc *catalog.Service, queueSvc *queue.Ser
 	mux.HandleFunc("PATCH /api/queue/{id}", s.moveQueue)
 	mux.HandleFunc("DELETE /api/queue/{id}", s.deleteQueue)
 	mux.HandleFunc("POST /api/plan", s.plan)
-	return mux
+	if files == nil {
+		return mux
+	}
+	pages := staticHandler(files)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		pages.ServeHTTP(w, r)
+	})
+}
+
+func staticHandler(files fs.FS) http.Handler {
+	server := http.FileServer(http.FS(files))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/queue.html", http.StatusSeeOther)
+			return
+		}
+		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if name == "" || name == "." || strings.HasPrefix(name, "..") {
+			http.NotFound(w, r)
+			return
+		}
+		info, err := fs.Stat(files, name)
+		if err != nil || info.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		server.ServeHTTP(w, r)
+	})
 }
 
 func ListenAndServe(addr string, handler http.Handler) error {
@@ -103,6 +139,15 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   sessionMaxAge,
 	})
+	writeJSON(w, http.StatusOK, map[string]any{"id": user.ID, "username": user.Username})
+}
+
+func (s *server) me(w http.ResponseWriter, r *http.Request) {
+	user, err := s.currentUser(r)
+	if err != nil {
+		s.writeErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": user.ID, "username": user.Username})
 }
 
@@ -364,6 +409,7 @@ func cardJSON(card catalog.Card) map[string]any {
 		"episodeCount":   card.EpisodeCount,
 		"averageMinutes": card.AverageMinutes,
 		"kind":           card.Kind,
+		"poster":         card.Poster,
 	}
 }
 
@@ -385,5 +431,6 @@ func itemJSON(item queue.Item) map[string]any {
 		"episodeCount":   item.EpisodeCount,
 		"averageMinutes": item.AverageMinutes,
 		"kind":           catalog.KindOf(item.EpisodeCount),
+		"poster":         item.Poster,
 	}
 }

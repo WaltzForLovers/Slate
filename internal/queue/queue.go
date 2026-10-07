@@ -16,6 +16,7 @@ type Item struct {
 	Year           int
 	EpisodeCount   int
 	AverageMinutes int
+	Poster         string
 }
 
 type Service struct {
@@ -98,5 +99,6 @@ func itemFrom(row storage.QueueRow) Item {
 		Year:           row.Title.Year,
 		EpisodeCount:   row.Title.EpisodeCount,
 		AverageMinutes: row.Title.AverageMinutes,
+		Poster:         row.Title.Poster,
 	}
 }

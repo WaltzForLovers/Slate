@@ -42,7 +42,7 @@ func TestSearchValidatesAndSaves(t *testing.T) {
 	db := openDB(t)
 	fake := &fakeClient{
 		shows: map[string][]Show{
-			"girls": {{ID: 10, Name: "Second", Year: 2011, AverageRuntime: 20}, {ID: 9, Name: "First", Year: 2012, AverageRuntime: 30}},
+			"girls": {{ID: 10, Name: "Second", Year: 2011, AverageRuntime: 20, Poster: "https://img.example/a.jpg"}, {ID: 9, Name: "First", Year: 2012, AverageRuntime: 30}},
 		},
 		episodes: map[int][]Episode{
 			9:  {{Runtime: 30}, {Runtime: 30}, {Runtime: 30}},
@@ -62,7 +62,7 @@ func TestSearchValidatesAndSaves(t *testing.T) {
 	if len(cards) != 2 || cards[0].Name != "Second" || cards[1].Name != "First" {
 		t.Fatalf("%+v", cards)
 	}
-	if cards[0].Kind != "film" || cards[0].ID == 0 || cards[1].Kind != "series" || cards[1].EpisodeCount != 3 {
+	if cards[0].Kind != "film" || cards[0].ID == 0 || cards[0].Poster != "https://img.example/a.jpg" || cards[1].Kind != "series" || cards[1].EpisodeCount != 3 {
 		t.Fatalf("%+v", cards)
 	}
 
@@ -73,6 +73,10 @@ func TestSearchValidatesAndSaves(t *testing.T) {
 	}
 	if got.Name != "First" || got.AverageMinutes != 30 {
 		t.Fatalf("cached %+v", got)
+	}
+	withPoster, err := svc.Get(context.Background(), cards[0].ID)
+	if err != nil || withPoster.Poster != "https://img.example/a.jpg" {
+		t.Fatalf("poster %+v %v", withPoster, err)
 	}
 	if _, err := svc.Get(context.Background(), 999); apperr.From(err).Code != apperr.CodeTitleNotFound {
 		t.Fatal(err)

@@ -14,7 +14,7 @@ func TestHTTPClientParsesShowAndEpisodes(t *testing.T) {
 		case "/search/shows":
 			gotShowQuery = r.URL.Query().Get("q")
 			w.Write([]byte(`[
-				{"show":{"id":139,"name":"Girls","premiered":"2012-04-15","averageRuntime":30,"runtime":28}},
+				{"show":{"id":139,"name":"Girls","premiered":"2012-04-15","averageRuntime":30,"runtime":28,"image":{"medium":"https://img.example/g.jpg"}}},
 				{"show":{"id":0,"name":"skip"}},
 				{"show":{"id":2,"name":"No date","premiered":null,"averageRuntime":null,"runtime":44}}
 			]`))
@@ -36,8 +36,11 @@ func TestHTTPClientParsesShowAndEpisodes(t *testing.T) {
 	if gotShowQuery != "girls & co" {
 		t.Fatalf("query %q", gotShowQuery)
 	}
-	if len(shows) != 2 || shows[0].ID != 139 || shows[0].Year != 2012 || shows[0].AverageRuntime != 30 || shows[0].Runtime != 28 {
+	if len(shows) != 2 || shows[0].ID != 139 || shows[0].Year != 2012 || shows[0].AverageRuntime != 30 || shows[0].Runtime != 28 || shows[0].Poster != "https://img.example/g.jpg" {
 		t.Fatalf("shows %+v", shows)
+	}
+	if shows[1].Poster != "" {
+		t.Fatalf("poster %q", shows[1].Poster)
 	}
 	if shows[1].Year != 0 || shows[1].AverageRuntime != 0 || shows[1].Runtime != 44 {
 		t.Fatalf("second %+v", shows[1])

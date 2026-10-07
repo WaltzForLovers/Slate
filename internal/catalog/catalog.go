@@ -22,6 +22,7 @@ type Card struct {
 	EpisodeCount   int
 	AverageMinutes int
 	Kind           string
+	Poster         string
 }
 
 type Show struct {
@@ -30,6 +31,7 @@ type Show struct {
 	Year           int
 	AverageRuntime int
 	Runtime        int
+	Poster         string
 }
 
 type Episode struct {
@@ -77,6 +79,7 @@ func BuildCard(show Show, episodes []Episode) Card {
 		EpisodeCount:   len(episodes),
 		AverageMinutes: average,
 		Kind:           KindOf(len(episodes)),
+		Poster:         show.Poster,
 	}
 }
 
@@ -128,6 +131,7 @@ func (s *Service) Search(ctx context.Context, query string) ([]Card, error) {
 			Year:           card.Year,
 			EpisodeCount:   card.EpisodeCount,
 			AverageMinutes: card.AverageMinutes,
+			Poster:         card.Poster,
 		})
 		if err != nil {
 			return nil, apperr.Internal(err)
@@ -154,6 +158,7 @@ func (s *Service) Get(ctx context.Context, id int64) (Card, error) {
 		EpisodeCount:   title.EpisodeCount,
 		AverageMinutes: title.AverageMinutes,
 		Kind:           KindOf(title.EpisodeCount),
+		Poster:         title.Poster,
 	}, nil
 }
 

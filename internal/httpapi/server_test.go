@@ -18,6 +18,7 @@ import (
 	"github.com/WaltzForLovers/Slate/internal/catalog"
 	"github.com/WaltzForLovers/Slate/internal/queue"
 	"github.com/WaltzForLovers/Slate/internal/storage"
+	"github.com/WaltzForLovers/Slate/web"
 )
 
 func TestAPI(t *testing.T) {
@@ -29,7 +30,7 @@ func TestAPI(t *testing.T) {
 				return
 			}
 			w.Write([]byte(`[
-				{"show":{"id":169,"name":"Test Show","premiered":"2008-01-20","averageRuntime":45}},
+				{"show":{"id":169,"name":"Test Show","premiered":"2008-01-20","averageRuntime":45,"image":{"medium":"https://img.example/show.jpg"}}},
 				{"show":{"id":2,"name":"Test Film","premiered":"1999-05-01","averageRuntime":80}}
 			]`))
 		case "/shows/169/episodes":
@@ -47,7 +48,7 @@ func TestAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	handler := New(auth.New(db), catalog.New(db, catalog.NewHTTPClient(tv.URL)), queue.New(db), io.Discard)
+	handler := New(auth.New(db), catalog.New(db, catalog.NewHTTPClient(tv.URL)), queue.New(db), io.Discard, nil)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 	jar, err := cookiejar.New(nil)
@@ -78,6 +79,10 @@ func TestAPI(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(body, `"username":"ann"`) {
 		t.Fatalf("login: %d %s", status, body)
 	}
+	status, body = get(t, client, srv.URL+"/api/me")
+	if status != http.StatusOK || !strings.Contains(body, `"username":"ann"`) {
+		t.Fatalf("me: %d %s", status, body)
+	}
 
 	status, body = get(t, client, srv.URL+"/api/queue")
 	if status != http.StatusOK || !strings.Contains(body, `"items":[]`) {
@@ -91,7 +96,7 @@ func TestAPI(t *testing.T) {
 	}
 
 	status, body = get(t, client, srv.URL+"/api/titles?q=te")
-	if status != http.StatusOK {
+	if status != http.StatusOK || !strings.Contains(body, "https://img.example/show.jpg") {
 		t.Fatalf("search: %d %s", status, body)
 	}
 	var search struct {
@@ -125,7 +130,7 @@ func TestAPI(t *testing.T) {
 
 	tv.Close()
 	status, body = get(t, client, srv.URL+"/api/titles/"+itoa(showID))
-	if status != http.StatusOK || !strings.Contains(body, "Test Show") {
+	if status != http.StatusOK || !strings.Contains(body, "Test Show") || !strings.Contains(body, "https://img.example/show.jpg") {
 		t.Fatalf("cached card: %d %s", status, body)
 	}
 	status, body = get(t, client, srv.URL+"/api/titles?q=other-show")
@@ -239,6 +244,50 @@ func TestPortBusy(t *testing.T) {
 func post(t *testing.T, client *http.Client, url, body string) (int, string) {
 	t.Helper()
 	return do(t, client, http.MethodPost, url, body)
+}
+
+func TestPages(t *testing.T) {
+	db, err := storage.Open(filepath.Join(t.TempDir(), "queue.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	handler := New(auth.New(db), catalog.New(db, catalog.NewHTTPClient("http://127.0.0.1:9")), queue.New(db), io.Discard, web.Files)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	resp, err := client.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/queue.html" {
+		t.Fatalf("root: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	page, err := client.Get(srv.URL + "/queue.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageBody, err := io.ReadAll(page.Body)
+	page.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.StatusCode != http.StatusOK || !strings.Contains(string(pageBody), "Очередь") || !strings.Contains(string(pageBody), "js/app.js") || page.Header.Get("Cache-Control") != "no-cache" {
+		t.Fatalf("queue page: %d %s", page.StatusCode, page.Header.Get("Cache-Control"))
+	}
+	status, body := get(t, client, srv.URL+"/css/app.css")
+	if status != http.StatusOK || !strings.Contains(body, "--bg") {
+		t.Fatalf("css: %d", status)
+	}
+	status, body = get(t, client, srv.URL+"/api/queue")
+	if status != http.StatusUnauthorized || !strings.Contains(body, apperr.Unauthorized().Message) {
+		t.Fatalf("api beside pages: %d %s", status, body)
+	}
 }
 
 func patch(t *testing.T, client *http.Client, url, body string) (int, string) {

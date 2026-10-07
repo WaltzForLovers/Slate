@@ -12,6 +12,7 @@ import (
 	"github.com/WaltzForLovers/Slate/internal/httpapi"
 	"github.com/WaltzForLovers/Slate/internal/queue"
 	"github.com/WaltzForLovers/Slate/internal/storage"
+	"github.com/WaltzForLovers/Slate/web"
 )
 
 func main() {
@@ -39,11 +40,16 @@ func main() {
 	}
 	defer db.Close()
 
+	catalogURL := os.Getenv("SLATE_CATALOG")
+	if catalogURL == "" {
+		catalogURL = "https://api.tvmaze.com"
+	}
 	handler := httpapi.New(
 		auth.New(db),
-		catalog.New(db, catalog.NewHTTPClient("https://api.tvmaze.com")),
+		catalog.New(db, catalog.NewHTTPClient(catalogURL)),
 		queue.New(db),
 		os.Stderr,
+		web.Files,
 	)
 	if err := httpapi.ListenAndServe(addr, handler); err != nil {
 		fmt.Fprintln(os.Stderr, apperr.From(err).Message)

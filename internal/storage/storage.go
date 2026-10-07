@@ -31,6 +31,7 @@ type Title struct {
 	Year           int
 	EpisodeCount   int
 	AverageMinutes int
+	Poster         string
 }
 
 type QueueRow struct {
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS titles (
     year INTEGER NOT NULL,
     episode_count INTEGER NOT NULL,
     average_minutes INTEGER NOT NULL,
+    poster TEXT NOT NULL DEFAULT '',
     fetched_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS queue_items (
@@ -93,7 +95,14 @@ CREATE TABLE IF NOT EXISTS queue_items (
     position INTEGER NOT NULL,
     UNIQUE(user_id, title_id)
 );`)
-	return err
+	if err != nil {
+		return err
+	}
+	_, err = db.sql.Exec(`ALTER TABLE titles ADD COLUMN poster TEXT NOT NULL DEFAULT ''`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	return nil
 }
 
 func (db *DB) CreateUser(ctx context.Context, username, passwordHash string) (User, error) {
@@ -153,26 +162,27 @@ func (db *DB) oneUser(ctx context.Context, query string, args ...any) (User, err
 func (db *DB) UpsertTitle(ctx context.Context, title Title) (Title, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	err := db.sql.QueryRowContext(ctx, `
-INSERT INTO titles (external_id, name, year, episode_count, average_minutes, fetched_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO titles (external_id, name, year, episode_count, average_minutes, poster, fetched_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(external_id) DO UPDATE SET
     name = excluded.name,
     year = excluded.year,
     episode_count = excluded.episode_count,
     average_minutes = excluded.average_minutes,
+    poster = excluded.poster,
     fetched_at = excluded.fetched_at
-RETURNING id, external_id, name, year, episode_count, average_minutes`,
-		title.ExternalID, title.Name, title.Year, title.EpisodeCount, title.AverageMinutes, now,
-	).Scan(&title.ID, &title.ExternalID, &title.Name, &title.Year, &title.EpisodeCount, &title.AverageMinutes)
+RETURNING id, external_id, name, year, episode_count, average_minutes, poster`,
+		title.ExternalID, title.Name, title.Year, title.EpisodeCount, title.AverageMinutes, title.Poster, now,
+	).Scan(&title.ID, &title.ExternalID, &title.Name, &title.Year, &title.EpisodeCount, &title.AverageMinutes, &title.Poster)
 	return title, err
 }
 
 func (db *DB) TitleByID(ctx context.Context, id int64) (Title, error) {
 	var title Title
 	err := db.sql.QueryRowContext(ctx, `
-SELECT id, external_id, name, year, episode_count, average_minutes
+SELECT id, external_id, name, year, episode_count, average_minutes, poster
 FROM titles WHERE id = ?`, id).Scan(
-		&title.ID, &title.ExternalID, &title.Name, &title.Year, &title.EpisodeCount, &title.AverageMinutes)
+		&title.ID, &title.ExternalID, &title.Name, &title.Year, &title.EpisodeCount, &title.AverageMinutes, &title.Poster)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Title{}, ErrNotFound
 	}
@@ -215,7 +225,7 @@ func (db *DB) AddQueueItem(ctx context.Context, userID, titleID int64) (QueueRow
 
 func (db *DB) ListQueue(ctx context.Context, userID int64) ([]QueueRow, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT q.id, q.position, t.id, t.external_id, t.name, t.year, t.episode_count, t.average_minutes
+SELECT q.id, q.position, t.id, t.external_id, t.name, t.year, t.episode_count, t.average_minutes, t.poster
 FROM queue_items q
 JOIN titles t ON t.id = q.title_id
 WHERE q.user_id = ?
@@ -227,7 +237,7 @@ ORDER BY q.position, q.id`, userID)
 	var list []QueueRow
 	for rows.Next() {
 		var row QueueRow
-		if err := rows.Scan(&row.ID, &row.Position, &row.Title.ID, &row.Title.ExternalID, &row.Title.Name, &row.Title.Year, &row.Title.EpisodeCount, &row.Title.AverageMinutes); err != nil {
+		if err := rows.Scan(&row.ID, &row.Position, &row.Title.ID, &row.Title.ExternalID, &row.Title.Name, &row.Title.Year, &row.Title.EpisodeCount, &row.Title.AverageMinutes, &row.Title.Poster); err != nil {
 			return nil, err
 		}
 		list = append(list, row)
@@ -304,11 +314,11 @@ func (db *DB) DeleteQueueItem(ctx context.Context, userID, itemID int64) error {
 func (db *DB) queueRow(ctx context.Context, userID, itemID int64) (QueueRow, error) {
 	var row QueueRow
 	err := db.sql.QueryRowContext(ctx, `
-SELECT q.id, q.position, t.id, t.external_id, t.name, t.year, t.episode_count, t.average_minutes
+SELECT q.id, q.position, t.id, t.external_id, t.name, t.year, t.episode_count, t.average_minutes, t.poster
 FROM queue_items q
 JOIN titles t ON t.id = q.title_id
 WHERE q.user_id = ? AND q.id = ?`, userID, itemID).Scan(
-		&row.ID, &row.Position, &row.Title.ID, &row.Title.ExternalID, &row.Title.Name, &row.Title.Year, &row.Title.EpisodeCount, &row.Title.AverageMinutes)
+		&row.ID, &row.Position, &row.Title.ID, &row.Title.ExternalID, &row.Title.Name, &row.Title.Year, &row.Title.EpisodeCount, &row.Title.AverageMinutes, &row.Title.Poster)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueueRow{}, ErrNotFound
 	}
