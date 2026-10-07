@@ -1,12 +1,12 @@
 # Slate
 
-Локальный сервис: очередь запланированных просмотров и план на свободное время.
+A local service: a queue of planned watches and a plan for the free time you have.
 
-Сейчас это первая часть. Одна программа отдаёт страницы и JSON API.
+This is part one. One program serves the pages and the JSON API.
 
 ```bash
 go test ./...
 go run ./cmd/queue
 ```
 
-Откройте http://127.0.0.1:8080 — корень ведёт на очередь. База `queue.db` создаётся рядом с программой. Для разработки путь к базе задаётся переменной `SLATE_DB`, адрес — `SLATE_ADDR`.
+Open http://127.0.0.1:8080. The root path leads to the queue. The database `queue.db` is created next to the program. For development, `SLATE_DB` sets the database path and `SLATE_ADDR` sets the address.
