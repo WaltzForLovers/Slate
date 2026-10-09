@@ -173,6 +173,33 @@ func TestTitlesAndQueue(t *testing.T) {
 	}
 }
 
+func TestSameExternalIDFromTwoSources(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	show, err := db.UpsertTitle(ctx, Title{Source: "tvmaze", ExternalID: 10, Name: "Show", Year: 2008, EpisodeCount: 62, AverageMinutes: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	film, err := db.UpsertTitle(ctx, Title{Source: "wikidata", ExternalID: 10, Name: "Film", Year: 2010, EpisodeCount: 1, AverageMinutes: 98})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if show.ID == film.ID || film.Name != "Film" {
+		t.Fatalf("show %+v film %+v", show, film)
+	}
+	again, err := db.UpsertTitle(ctx, Title{Source: "wikidata", ExternalID: 10, Name: "Film 2", Year: 2010, EpisodeCount: 1, AverageMinutes: 99})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != film.ID || again.Name != "Film 2" || again.AverageMinutes != 99 {
+		t.Fatalf("film upsert %+v", again)
+	}
+	kept, err := db.TitleByID(ctx, show.ID)
+	if err != nil || kept.Name != "Show" {
+		t.Fatalf("show overwritten %+v %v", kept, err)
+	}
+}
+
 func open(t *testing.T) *DB {
 	t.Helper()
 	return openAt(t, filepath.Join(t.TempDir(), "queue.db"))
