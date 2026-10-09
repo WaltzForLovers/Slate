@@ -125,6 +125,80 @@ func TestSearchStopsAtTenAndOnTimeout(t *testing.T) {
 	}
 }
 
+func TestSearchIncludesFilms(t *testing.T) {
+	db := openDB(t)
+	shows := &fakeClient{shows: map[string][]Show{
+		"dragon": nil,
+		"both":   {{ID: 7, Name: "The Show", Year: 2021, AverageRuntime: 40}},
+	}}
+	films := &fakeFilms{films: map[string][]Show{
+		"dragon": {{ID: 373096, Name: "How to Train Your Dragon", Year: 2010, Runtime: 98, Poster: "https://img.example/d.jpg"}},
+		"both":   {{ID: 373096, Name: "How to Train Your Dragon", Year: 2010, Runtime: 98, Poster: "https://img.example/d.jpg"}},
+	}}
+	svc := New(db, shows).WithFilms(films)
+
+	cards, err := svc.Search(context.Background(), "dragon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cards) != 1 || cards[0].Name != "How to Train Your Dragon" || cards[0].Kind != "film" || cards[0].EpisodeCount != 1 || cards[0].AverageMinutes != 98 || cards[0].Year != 2010 || cards[0].Poster != "https://img.example/d.jpg" || cards[0].ID == 0 {
+		t.Fatalf("%+v", cards)
+	}
+
+	shows.shows["clash"] = []Show{{ID: 373096, Name: "Not The Film", Year: 2001, AverageRuntime: 22}}
+	savedShow, err := svc.Search(context.Background(), "clash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if savedShow[0].ID == cards[0].ID || savedShow[0].Name != "Not The Film" {
+		t.Fatalf("ids collided film %d show %+v", cards[0].ID, savedShow)
+	}
+
+	shows.err = errors.New("timeout")
+	onlyFilm, err := svc.Search(context.Background(), "dragon")
+	if err != nil || len(onlyFilm) != 1 || onlyFilm[0].Kind != "film" {
+		t.Fatalf("%+v %v", onlyFilm, err)
+	}
+	shows.err = nil
+
+	films.err = errors.New("wiki down")
+	onlyShow, err := svc.Search(context.Background(), "both")
+	if err != nil || len(onlyShow) != 1 || onlyShow[0].Name != "The Show" {
+		t.Fatalf("%+v %v", onlyShow, err)
+	}
+}
+
+func TestSearchKeepsAFilmWhenShowsFillTheList(t *testing.T) {
+	db := openDB(t)
+	shows := make([]Show, 10)
+	for i := range shows {
+		shows[i] = Show{ID: i + 1, Name: "S", Year: 2000, AverageRuntime: 10}
+	}
+	fake := &fakeClient{shows: map[string][]Show{"mix": shows}}
+	films := &fakeFilms{films: map[string][]Show{
+		"mix": {{ID: 50, Name: "The Film", Year: 1999, Runtime: 100}},
+	}}
+	cards, err := New(db, fake).WithFilms(films).Search(context.Background(), "mix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cards) != 10 || cards[len(cards)-1].Name != "The Film" || cards[len(cards)-1].Kind != "film" {
+		t.Fatalf("%d %+v", len(cards), cards[len(cards)-1])
+	}
+}
+
+type fakeFilms struct {
+	films map[string][]Show
+	err   error
+}
+
+func (f *fakeFilms) SearchFilms(_ context.Context, query string) ([]Show, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.films[query], nil
+}
+
 type fakeClient struct {
 	shows    map[string][]Show
 	episodes map[int][]Episode

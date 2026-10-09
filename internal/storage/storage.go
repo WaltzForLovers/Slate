@@ -26,6 +26,7 @@ type User struct {
 
 type Title struct {
 	ID             int64
+	Source         string
 	ExternalID     int
 	Name           string
 	Year           int
@@ -80,13 +81,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS titles (
     id INTEGER PRIMARY KEY,
-    external_id INTEGER NOT NULL UNIQUE,
+    external_id INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'tvmaze',
     name TEXT NOT NULL,
     year INTEGER NOT NULL,
     episode_count INTEGER NOT NULL,
     average_minutes INTEGER NOT NULL,
     poster TEXT NOT NULL DEFAULT '',
-    fetched_at TEXT NOT NULL
+    fetched_at TEXT NOT NULL,
+    UNIQUE(source, external_id)
 );
 CREATE TABLE IF NOT EXISTS queue_items (
     id INTEGER PRIMARY KEY,
@@ -102,7 +105,63 @@ CREATE TABLE IF NOT EXISTS queue_items (
 	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return err
 	}
-	return nil
+	return db.migrateTitleSource()
+}
+
+func (db *DB) migrateTitleSource() error {
+	rows, err := db.sql.Query(`PRAGMA table_info(titles)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasSource := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, colType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == "source" {
+			hasSource = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasSource {
+		return nil
+	}
+	if _, err := db.sql.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer db.sql.Exec(`PRAGMA foreign_keys = ON`)
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`
+CREATE TABLE titles_new (
+    id INTEGER PRIMARY KEY,
+    external_id INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'tvmaze',
+    name TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    episode_count INTEGER NOT NULL,
+    average_minutes INTEGER NOT NULL,
+    poster TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT NOT NULL,
+    UNIQUE(source, external_id)
+);
+INSERT INTO titles_new (id, external_id, source, name, year, episode_count, average_minutes, poster, fetched_at)
+SELECT id, external_id, 'tvmaze', name, year, episode_count, average_minutes, poster, fetched_at FROM titles;
+DROP TABLE titles;
+ALTER TABLE titles_new RENAME TO titles;`)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (db *DB) CreateUser(ctx context.Context, username, passwordHash string) (User, error) {
@@ -161,10 +220,13 @@ func (db *DB) oneUser(ctx context.Context, query string, args ...any) (User, err
 
 func (db *DB) UpsertTitle(ctx context.Context, title Title) (Title, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if title.Source == "" {
+		title.Source = "tvmaze"
+	}
 	err := db.sql.QueryRowContext(ctx, `
-INSERT INTO titles (external_id, name, year, episode_count, average_minutes, poster, fetched_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(external_id) DO UPDATE SET
+INSERT INTO titles (external_id, source, name, year, episode_count, average_minutes, poster, fetched_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(source, external_id) DO UPDATE SET
     name = excluded.name,
     year = excluded.year,
     episode_count = excluded.episode_count,
@@ -172,7 +234,7 @@ ON CONFLICT(external_id) DO UPDATE SET
     poster = excluded.poster,
     fetched_at = excluded.fetched_at
 RETURNING id, external_id, name, year, episode_count, average_minutes, poster`,
-		title.ExternalID, title.Name, title.Year, title.EpisodeCount, title.AverageMinutes, title.Poster, now,
+		title.ExternalID, title.Source, title.Name, title.Year, title.EpisodeCount, title.AverageMinutes, title.Poster, now,
 	).Scan(&title.ID, &title.ExternalID, &title.Name, &title.Year, &title.EpisodeCount, &title.AverageMinutes, &title.Poster)
 	return title, err
 }

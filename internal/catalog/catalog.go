@@ -12,7 +12,11 @@ import (
 	"github.com/WaltzForLovers/Slate/internal/storage"
 )
 
-const searchLimit = 10
+const (
+	searchLimit    = 10
+	sourceTVMaze   = "tvmaze"
+	sourceWikidata = "wikidata"
+)
 
 type Card struct {
 	ID             int64
@@ -27,11 +31,16 @@ type Card struct {
 
 type Show struct {
 	ID             int
+	Source         string
 	Name           string
 	Year           int
 	AverageRuntime int
 	Runtime        int
 	Poster         string
+}
+
+type FilmClient interface {
+	SearchFilms(ctx context.Context, query string) ([]Show, error)
 }
 
 type Episode struct {
@@ -46,11 +55,17 @@ type Client interface {
 type Service struct {
 	db      *storage.DB
 	client  Client
+	films   FilmClient
 	timeout time.Duration
 }
 
 func New(db *storage.DB, client Client) *Service {
-	return &Service{db: db, client: client, timeout: 5 * time.Second}
+	return &Service{db: db, client: client, timeout: 8 * time.Second}
+}
+
+func (s *Service) WithFilms(films FilmClient) *Service {
+	s.films = films
+	return s
 }
 
 func KindOf(episodeCount int) string {
@@ -91,17 +106,87 @@ func (s *Service) Search(ctx context.Context, query string) ([]Card, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	shows, err := s.client.SearchShows(ctx, query)
-	if err != nil {
-		return nil, apperr.CatalogUnavailable().WithCause(err)
+	type found struct {
+		shows []Show
+		err   error
 	}
-	if len(shows) == 0 {
+	filmCh := make(chan found, 1)
+	go func() {
+		if s.films == nil {
+			filmCh <- found{}
+			return
+		}
+		shows, err := s.films.SearchFilms(ctx, query)
+		filmCh <- found{shows, err}
+	}()
+
+	shows, showErr := s.client.SearchShows(ctx, query)
+	films := <-filmCh
+	if showErr != nil && (films.err != nil || len(films.shows) == 0) {
+		return nil, apperr.CatalogUnavailable().WithCause(showErr)
+	}
+	var episodes [][]Episode
+	if showErr != nil {
+		shows = nil
+	} else {
+		var err error
+		episodes, err = s.fetchEpisodes(ctx, shows)
+		if err != nil && len(films.shows) == 0 {
+			return nil, apperr.CatalogUnavailable().WithCause(err)
+		}
+		if err != nil {
+			shows = nil
+			episodes = nil
+		}
+	}
+	if films.err != nil {
+		if len(shows) == 0 {
+			return nil, apperr.CatalogUnavailable().WithCause(films.err)
+		}
+		films.shows = nil
+	}
+	merged := mergeResults(shows, episodes, films.shows)
+	if len(merged) == 0 {
 		return nil, apperr.TitleNotFound()
 	}
-	if len(shows) > searchLimit {
-		shows = shows[:searchLimit]
-	}
 
+	cards := make([]Card, 0, len(merged))
+	for _, item := range merged {
+		var episodes []Episode
+		if item.show.Source == sourceWikidata {
+			episodes = []Episode{{Runtime: item.show.Runtime}}
+		} else {
+			episodes = item.episodes
+		}
+		card := BuildCard(item.show, episodes)
+		source := item.show.Source
+		if source == "" {
+			source = sourceTVMaze
+		}
+		saved, err := s.db.UpsertTitle(ctx, storage.Title{
+			Source:         source,
+			ExternalID:     card.ExternalID,
+			Name:           card.Name,
+			Year:           card.Year,
+			EpisodeCount:   card.EpisodeCount,
+			AverageMinutes: card.AverageMinutes,
+			Poster:         card.Poster,
+		})
+		if err != nil {
+			return nil, apperr.Internal(err)
+		}
+		card.ID = saved.ID
+		cards = append(cards, card)
+	}
+	return cards, nil
+}
+
+type mergedShow struct {
+	show     Show
+	episodes []Episode
+}
+
+func (s *Service) fetchEpisodes(ctx context.Context, shows []Show) ([][]Episode, error) {
 	episodes := make([][]Episode, len(shows))
 	errs := make([]error, len(shows))
 	var wg sync.WaitGroup
@@ -118,28 +203,39 @@ func (s *Service) Search(ctx context.Context, query string) ([]Card, error) {
 	wg.Wait()
 	for _, err := range errs {
 		if err != nil {
-			return nil, apperr.CatalogUnavailable().WithCause(err)
+			return nil, err
 		}
 	}
+	return episodes, nil
+}
 
-	cards := make([]Card, 0, len(shows))
-	for i, show := range shows {
-		card := BuildCard(show, episodes[i])
-		saved, err := s.db.UpsertTitle(ctx, storage.Title{
-			ExternalID:     card.ExternalID,
-			Name:           card.Name,
-			Year:           card.Year,
-			EpisodeCount:   card.EpisodeCount,
-			AverageMinutes: card.AverageMinutes,
-			Poster:         card.Poster,
-		})
-		if err != nil {
-			return nil, apperr.Internal(err)
-		}
-		card.ID = saved.ID
-		cards = append(cards, card)
+func mergeResults(shows []Show, episodes [][]Episode, films []Show) []mergedShow {
+	if len(shows) > 0 && len(films) > 5 {
+		films = films[:5]
 	}
-	return cards, nil
+	if len(films) > searchLimit {
+		films = films[:searchLimit]
+	}
+	room := searchLimit - len(films)
+	if len(shows) > room {
+		shows = shows[:room]
+	}
+	out := make([]mergedShow, 0, len(shows)+len(films))
+	for i, show := range shows {
+		if show.Source == "" {
+			show.Source = sourceTVMaze
+		}
+		var eps []Episode
+		if i < len(episodes) {
+			eps = episodes[i]
+		}
+		out = append(out, mergedShow{show: show, episodes: eps})
+	}
+	for _, film := range films {
+		film.Source = sourceWikidata
+		out = append(out, mergedShow{show: film})
+	}
+	return out
 }
 
 func (s *Service) Get(ctx context.Context, id int64) (Card, error) {

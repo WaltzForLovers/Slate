@@ -115,7 +115,10 @@ function seriesWord(n) {
 }
 
 function runtimeLine(item) {
-  if (item.kind === "film") return formatMinutes(item.average);
+  if (item.kind === "film") {
+    if (!item.average) return "длительность неизвестна";
+    return formatMinutes(item.average);
+  }
   return item.episodes + " " + seriesWord(item.episodes) + ", средняя " + item.average + " мин";
 }
 

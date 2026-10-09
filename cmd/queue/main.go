@@ -46,7 +46,9 @@ func main() {
 	}
 	handler := httpapi.New(
 		auth.New(db),
-		catalog.New(db, catalog.NewHTTPClient(catalogURL)),
+		catalog.New(db, catalog.NewHTTPClient(catalogURL)).WithFilms(
+			catalog.NewWikidata("https://www.wikidata.org", "https://en.wikipedia.org"),
+		),
 		queue.New(db),
 		os.Stderr,
 		web.Files,
